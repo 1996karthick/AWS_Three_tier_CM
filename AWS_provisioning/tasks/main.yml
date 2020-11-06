@@ -1,0 +1,466 @@
+---
+###########################################################################
+#                                                                         #
+#                           VPC CREATION                                  #
+#                                                                         #
+###########################################################################
+    - name: Create project VPC
+      ec2_vpc_net:
+        name: "{{ vpc.aws_vpc_name }}"
+        cidr_block: "{{ vpc.aws_vpc_cidrblock }}"
+        region: "{{ vpc.aws_vpc_region }}"
+        tenancy: default
+        state: present
+      register: vpc_result
+      tags:
+        - vpc
+        - create
+###########################################################################
+#                                                                         #
+#                           SUBNET CREATION                               #
+#                                                                         #
+###########################################################################
+    - name: Create Public subnet
+      ec2_vpc_subnet:
+        region: "{{ vpc.aws_vpc_region }}"
+        state: present
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        az: "{{ item.name }}"
+        cidr: "{{ item.value }}"
+        map_public: true
+        resource_tags:
+          Name: "Subnet Public {{ item.tag }}"
+      with_items:
+        - { name: "{{ vpc.aws_vpc_az_a }}", value: "{{ vpc.aws_vpc_subnet_az_a }}", tag: "{{ vpc.aws_vpc_subnet_az_a }}" }
+      register: subnet_result
+      tags:
+        - create
+    - name: Public Subnet
+      debug: msg="{{ subnet_result | json_query('results[].subnet.id') | replace('[','') | replace(']','') | replace("\'","") }}"
+      register: public
+      tags:
+        - create
+
+    - name: Create Private1 subnet
+      ec2_vpc_subnet:
+        region: "{{ vpc.aws_vpc_region }}"
+        state: present
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        az: "{{ item.name }}"
+        cidr: "{{ item.value }}"
+        map_public: true
+        resource_tags:
+          Name: "Subnet Private1 {{ item.tag }}"
+      with_items:
+        - { name: "{{ vpc.aws_vpc_az_b }}", value: "{{ vpc.aws_vpc_subnet_az_b }}", tag: "{{ vpc.aws_vpc_subnet_az_b }}" }
+      register: subnet_result
+      tags:
+        - create
+    - name: Private1 Subnet
+      debug: msg="{{ subnet_result | json_query('results[].subnet.id') | replace('[','') | replace(']','') | replace("\'","") }}"
+      register: private1
+      tags:
+        - create
+
+    - name: Create private2 subnet
+      ec2_vpc_subnet:
+        region: "{{ vpc.aws_vpc_region }}"
+        state: present
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        az: "{{ item.name }}"
+        cidr: "{{ item.value }}"
+        map_public: true
+        resource_tags:
+          Name: "Subnet Private2 {{ item.tag }}"
+      with_items:
+        - { name: "{{ vpc.aws_vpc_az_c }}", value: "{{ vpc.aws_vpc_subnet_az_c }}", tag: "{{ vpc.aws_vpc_subnet_az_c }}" }
+      register: subnet_result
+      tags:
+        - create
+    - name: Private2 Subnet
+      debug: msg="{{ subnet_result | json_query('results[].subnet.id') | replace('[','') | replace(']','') | replace("\'","") }}"
+      register: private2
+      tags:
+        - create
+###########################################################################
+#                                                                         #
+#                           INTERNET GATEWAY                              #
+#                               CREATION                                  #
+###########################################################################
+    - name: Create igw
+      ec2_vpc_igw:
+        region: "{{ vpc.aws_vpc_region }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        state: present
+      register: igw_result
+      tags:
+        - igw
+        - create
+###########################################################################
+#                                                                         #
+#                           ROUTE TABLE AND NAT                           #
+#                               CREATION                                  #
+###########################################################################
+    - name: Setup subnet route table public
+      ec2_vpc_route_table:
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ vpc.aws_vpc_region }}"
+        tags:
+          Name: Public
+        subnets:
+          - "{{ vpc.aws_vpc_subnet_az_a }}"
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ igw_result.gateway_id }}"
+      register: rt_result
+      tags:
+        - rt
+        - create
+
+    - name: Create NAT gateway
+      ec2_vpc_nat_gateway:
+        state: present
+        subnet_id: "{{ public.msg }}"
+        wait: yes
+        region: "{{ vpc.aws_vpc_region }}"
+        if_exist_do_not_create: true
+      register: new_nat_gateway
+      tags:
+        - nat
+        - create
+
+    - name: Nat
+      debug: msg="{{ new_nat_gateway }}"
+      tags:
+        - create
+
+    - name: Setup subnet route table private1
+      ec2_vpc_route_table:
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ vpc.aws_vpc_region }}"
+        tags:
+          Name: Private1
+        subnets:
+          - "{{ vpc.aws_vpc_subnet_az_b }}"
+        routes:
+          - dest: 0.0.0.0/0
+            nat_gateway_id: "{{ new_nat_gateway.nat_gateway_id }}"
+      register: rt_result1
+      tags:
+        - rt
+        - create
+
+    - name: Setup subnet route table private2
+      ec2_vpc_route_table:
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ vpc.aws_vpc_region }}"
+        tags:
+          Name: Private2
+        subnets:
+          - "{{ vpc.aws_vpc_subnet_az_c }}"
+        routes:
+          - dest: 0.0.0.0/0
+            nat_gateway_id: "{{ new_nat_gateway.nat_gateway_id }}"
+      register: rt_result2
+      tags:
+        - rt
+        - create
+###########################################################################
+#                                                                         #
+#                             SUBNET GROUP                                #
+#                               CREATION                                  #
+###########################################################################
+    - name: Creating RDS Subnet groups
+      rds_subnet_group:
+        state: present
+        name: RDSSubnetGroup
+        description: RDSSubnetGroup
+        region: "{{ vpc.aws_vpc_region }}"
+        subnets:
+          - "{{ private1.msg }}"
+          - "{{ private2.msg }}"
+      tags:
+        - create
+###########################################################################
+#                                                                         #
+#                            SECURITY GROUP                               #
+#                               CREATION                                  #
+###########################################################################
+    - name: Default SG for prod subnet
+      ec2_group:
+        name: Prod
+        description: an prod EC2 group
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ vpc.aws_vpc_region }}"
+        rules:
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 8080
+            to_port: 8080
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 443
+            to_port: 443
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 3306
+            to_port: 3306
+            cidr_ip: 0.0.0.0/0
+          - proto: all
+            cidr_ip: "{{ vpc.aws_vpc_cidrblock }}"
+      register: security_group
+      tags:
+        - create
+###########################################################################
+#                                                                         #
+#                              WEB SERVER                                 #
+#                               CREATION                                  #
+###########################################################################
+    - name: Create centos EC2 Web server
+      ec2:
+        image: ami-02ccb28830b645a41
+        wait: yes
+        instance_type: t2.micro
+        region: "{{ vpc.aws_vpc_region }}"
+        group_id: "{{ security_group.group_id }}"
+        vpc_subnet_id: "{{ public.msg }}"
+        key_name: "{{ keypair_name }}"
+        assign_public_ip: yes
+        instance_tags:
+          Name: centos_web_instance
+        count_tag:
+          Name: ansible_web_server
+        exact_count: 1
+      register: centospublic
+      tags:
+        - create
+###########################################################################
+#                                                                         #
+#                              APP SERVER                                 #
+#                               CREATION                                  #
+###########################################################################
+    - name: Create centos EC2 App server
+      ec2:
+        image: ami-02ccb28830b645a41
+        wait: yes
+        instance_type: t2.micro
+        region: "{{ vpc.aws_vpc_region }}"
+        group_id: "{{ security_group.group_id }}"
+        vpc_subnet_id: "{{ private1.msg }}"
+        key_name: "{{ keypair_name }}"
+        assign_public_ip: no
+        instance_tags:
+          Name: centos_app_instance
+        count_tag:
+          Name: ansible_app_server
+        exact_count: 1
+      register: centosprivate
+      tags:
+        - create
+###########################################################################
+#                                                                         #
+#                                  RDS                                    #
+#                               CREATION                                  #
+###########################################################################
+    - name: Creating RDS instance
+      rds:
+        command: create
+        instance_name: rdsinstance
+        db_engine: MySQL
+        size: 10
+        region: "{{ vpc.aws_vpc_region }}"
+        publicly_accessible: no
+        instance_type: db.t3.micro
+        username: zippyops
+        password: database12345
+        multi_zone: yes
+        subnet: RDSSubnetGroup
+        tags:
+          Environment: testing
+          Application: cms
+      register: rds
+      tags:
+        - create
+    - name: rds
+      debug: msg="{{ rds }}"
+      register: rdspri
+      tags:
+        - create
+
+###########################################################################
+#                                                                         #
+#                               VAR FILE                                  #
+#                               CREATION                                  #
+###########################################################################
+    - name: Gathering the details to host specific filenames in localhost
+      copy:
+        content: "{{ item }}\n"
+        dest: "/etc/ansible/workspace/AWS_Three_tier_CM/AWS_provisioning/vars/main.yml"
+      with_items:
+        - "---\n\nVPC_ID: {{ vpc_result.vpc.id }},\nsecurity_group: {{ security_group.group_id }},\nRoute_table: {{ rt_result.route_table.id }},\nRoute_table_1: {{ rt_result1.route_table.id }},\nRoute_table_2: {{ rt_result2.route_table.id }},\nwebserver: {{ centospublic | json_query('instance_ids[]') }},\nappserver: {{ centosprivate | json_query('instance_ids[]') }},\nNAT: {{ new_nat_gateway.nat_gateway_id }}"
+      tags:
+        - create
+###########################################################################
+#                                                                         #
+#                               DELETION                                  #
+#                                                                         #
+###########################################################################
+    - name: Terminate instances that were previously launched centos public
+      ec2:
+        region: us-east-2
+        instance_ids: "{{ webserver }}"
+        state: absent
+      tags:
+        - delete
+    - name: Terminate instances that were previously launched centos private
+      ec2:
+        region: us-east-2
+        instance_ids: "{{ appserver }}"
+        state: absent
+      tags:
+        - delete
+    - name: Deleting RDS instance
+      rds:
+        command: delete
+        instance_name: rdsinstance
+        region: "{{ vpc.aws_vpc_region }}"
+      tags:
+        - delete
+    - name: Pause for 5 minutes to build app cache
+      pause:
+         minutes: 5
+      tags:
+        - delete
+###########################################################################
+#                                                                         #
+#                        SUBNET GROUP DELETION                            #
+#                                                                         #
+###########################################################################
+    - name: Deleting RDS Subnet groups
+      rds_subnet_group:
+        state: absent
+        name: RDSSubnetGroup
+        region: "{{ vpc.aws_vpc_region }}"
+      tags:
+        - delete
+###########################################################################
+#                                                                         #
+#                             NAT DELETION                                #
+#                                                                         #
+###########################################################################
+    - name: Delete nat gateway and release EIP.
+      ec2_vpc_nat_gateway:
+        state: absent
+        nat_gateway_id: "{{ NAT }}"
+        release_eip: yes
+        wait: yes
+        wait_timeout: 300
+        region: "{{ vpc.aws_vpc_region }}"
+      tags:
+        - delete
+###########################################################################
+#                                                                         #
+#                       INTERNET GATEWAY DELETION                         #
+#                                                                         #
+###########################################################################
+    - name: Remove Internet Gateway from the vpc
+      ec2_vpc_igw:
+        region: "{{ vpc.aws_vpc_region }}"
+        state: absent
+        vpc_id: "{{ VPC_ID }}"
+      tags:
+        - delete
+###########################################################################
+#                                                                         #
+#                            SUBNET DELETION                              #
+#                                                                         #
+###########################################################################
+    - name: Remove subnet from the vpc
+      ec2_vpc_subnet:
+        region: "{{ vpc.aws_vpc_region }}"
+        state: absent
+        vpc_id: "{{ VPC_ID }}"
+        cidr: "{{ vpc.aws_vpc_subnet_az_a }}"
+      tags:
+        - delete
+    - name: Remove subnet from the vpc
+      ec2_vpc_subnet:
+        region: "{{ vpc.aws_vpc_region }}"
+        state: absent
+        vpc_id: "{{ VPC_ID }}"
+        cidr: "{{ vpc.aws_vpc_subnet_az_b }}"
+      tags:
+        - delete
+    - name: Remove subnet from the vpc
+      ec2_vpc_subnet:
+        region: "{{ vpc.aws_vpc_region }}"
+        state: absent
+        vpc_id: "{{ VPC_ID }}"
+        cidr: "{{ vpc.aws_vpc_subnet_az_c }}"
+      tags:
+        - delete
+###########################################################################
+#                                                                         #
+#                         ROUTE TABLE DELETION                            #
+#                                                                         #
+###########################################################################
+    - name: delete route table
+      ec2_vpc_route_table:
+        vpc_id: "{{ VPC_ID }}"
+        region: "{{ vpc.aws_vpc_region }}"
+        route_table_id: "{{ Route_table }}"
+        lookup: id
+        state: absent
+      tags:
+        - delete
+    - name: delete route table
+      ec2_vpc_route_table:
+        vpc_id: "{{ VPC_ID }}"
+        region: "{{ vpc.aws_vpc_region }}"
+        route_table_id: "{{ Route_table_1 }}"
+        lookup: id
+        state: absent
+      tags:
+        - delete
+    - name: delete route table
+      ec2_vpc_route_table:
+        vpc_id: "{{ VPC_ID }}"
+        region: "{{ vpc.aws_vpc_region }}"
+        route_table_id: "{{ Route_table_2 }}"
+        lookup: id
+        state: absent
+      tags:
+        - delete
+###########################################################################
+#                                                                         #
+#                        SECURITY GROUP DELETION                          #
+#                                                                         #
+###########################################################################
+    - name: "Delete group by its id"
+      ec2_group:
+        region: "{{ vpc.aws_vpc_region }}"
+        group_id: "{{ security_group }}"
+        state: absent
+      tags:
+        - delete
+###########################################################################
+#                                                                         #
+#                             VPC DELETION                                #
+#                                                                         #
+###########################################################################
+    - name: Terminating VPC
+      ec2_vpc_net:
+        name: "{{ vpc.aws_vpc_name }}"
+        cidr_block: "{{ vpc.aws_vpc_cidrblock }}"
+        region: "{{ vpc.aws_vpc_region }}"
+        tenancy: default
+        state: absent
+      tags:
+        - delete

@@ -1,0 +1,19 @@
+---
+# defaults file for AWS_provisioning
+
+vpc:
+  #Name of VPC
+  aws_vpc_name: "ansible-vpc"
+  #AWS region for example
+  aws_vpc_region: "us-east-2"
+  #AWS VPC cidr block for example
+  aws_vpc_cidrblock: "10.0.0.0/16"
+  #AWS availability zones in region for example
+  aws_vpc_az_a: "us-east-2a"
+  aws_vpc_az_b: "us-east-2b"
+  aws_vpc_az_c: "us-east-2c"
+  #AWS VPC subnets in availability zone from vpc cidr block
+  aws_vpc_subnet_az_a: "10.0.0.0/24"
+  aws_vpc_subnet_az_b: "10.0.1.0/24"
+  aws_vpc_subnet_az_c: "10.0.2.0/24"
+keypair_name: "ohio_key"

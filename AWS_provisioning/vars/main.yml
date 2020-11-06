@@ -1,0 +1,10 @@
+---
+
+VPC_ID: vpc-0f357a12754f7b95c
+security_group: sg-03ca46da6548a5db2
+Route_table: rtb-0d6706143863f0a80
+centos: i-0ac85d46a0b8a69c2
+ubuntu: i-096652922f7b30b14
+windows: i-00de5211b8460fc59
+
+
